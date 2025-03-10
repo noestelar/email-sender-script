@@ -4,6 +4,9 @@ import argparse
 import smtplib
 import os
 import re
+import time
+import json
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -52,30 +55,58 @@ def read_excel_column(file_path, column_name=None, column_index=None, sheet_name
         return None
 
 # %% leer emails
-def read_emails_from_excel(file_path, sheet_name=0):
+def read_emails_from_excel(file_path, sheet_name=0, sent_emails_file=None):
     """
     Read an Excel file and extract all email addresses from the 'E-mail' column.
+    Optionally filter out already sent emails.
     
     Parameters:
     file_path (str): Path to the Excel file
     sheet_name (str or int, optional): Name or index of the sheet to read
+    sent_emails_file (str, optional): Path to the JSON file tracking sent emails
     
     Returns:
-    list: Email addresses from the 'E-mail' column
+    tuple: (List of email addresses, DataFrame with all data)
     """
     try:
         # Read the Excel file
-        emails = read_excel_column(file_path, column_name="E-mail", sheet_name=sheet_name)
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+        
+        # Check if 'E-mail' column exists
+        if 'E-mail' not in df.columns:
+            print("Warning: 'E-mail' column not found in the Excel file")
+            return [], df
         
         # Filter out any None or empty values
-        if emails:
-            emails = [email for email in emails if email and isinstance(email, str)]
+        df = df[df['E-mail'].notna()]
+        df = df[df['E-mail'].astype(str).str.strip() != '']
         
-        return emails
+        # Load already sent emails if tracking file exists
+        sent_emails = set()
+        if sent_emails_file and os.path.exists(sent_emails_file):
+            try:
+                with open(sent_emails_file, 'r') as f:
+                    sent_data = json.load(f)
+                    sent_emails = set(sent_data.get('sent_emails', []))
+                print(f"Loaded {len(sent_emails)} previously sent emails from tracking file")
+            except Exception as e:
+                print(f"Warning: Could not load sent emails tracking file: {e}")
+        
+        # Filter out already sent emails
+        if sent_emails:
+            original_count = len(df)
+            df = df[~df['E-mail'].isin(sent_emails)]
+            filtered_count = len(df)
+            print(f"Filtered out {original_count - filtered_count} already sent emails")
+        
+        # Extract email addresses
+        emails = df['E-mail'].tolist()
+        
+        return emails, df
     
     except Exception as e:
         print(f"Error reading emails: {e}")
-        return []
+        return [], None
 
 # %% leer plantilla HTML
 def read_html_template(template_path, placeholder_values=None):
@@ -126,7 +157,7 @@ def read_html_template(template_path, placeholder_values=None):
 
 # %% enviar emails
 def send_emails(email_list, subject, message_body=None, template_path=None, placeholder_values=None, 
-                sender_email=None, sender_password=None, smtp_server="smtp.gmail.com", smtp_port=587):
+                sender_email=None, sender_password=None, smtp_server="smtp.isosdrive.com", smtp_port=587):
     """
     Send emails to a list of recipients using either plain text or an HTML template.
     
@@ -150,9 +181,9 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
     }
     
     try:
-        # Set up the SMTP server
+        # Set up the SMTP server with SSL
         server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()  # Secure the connection
+        server.starttls()
         server.login(sender_email, sender_password)
         
         # Determine if we're using HTML template or plain text
@@ -180,10 +211,14 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
         for recipient in email_list:
             try:
                 # Create message
-                msg = MIMEMultipart()
+                msg = MIMEMultipart('related')  # Use 'related' for HTML with inline images
                 msg['From'] = sender_email
                 msg['To'] = recipient
                 msg['Subject'] = subject
+                
+                # Create alternative part for the email (text/html)
+                alt_part = MIMEMultipart('alternative')
+                msg.attach(alt_part)
                 
                 # Attach the message body
                 if html_content:
@@ -199,6 +234,13 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
                         for key, value in recipient_placeholder_values.items():
                             placeholder = f"{{{{{key}}}}}"
                             recipient_html = recipient_html.replace(placeholder, str(value))
+                    
+                    # Add plain text alternative first (for clients that don't support HTML)
+                    plain_text = "Este correo contiene contenido HTML que tu cliente de correo no puede mostrar."
+                    alt_part.attach(MIMEText(plain_text, 'plain'))
+                    
+                    # Then add the HTML version
+                    alt_part.attach(MIMEText(recipient_html, 'html'))
                     
                     # Embed images with Content-ID references
                     for i, img_path in enumerate(img_paths):
@@ -225,12 +267,9 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
                             msg.attach(img)
                         except Exception as img_error:
                             print(f"Warning: Could not embed image {img_path}: {img_error}")
-                    
-                    # Attach HTML content after embedding images
-                    msg.attach(MIMEText(recipient_html, 'html'))
                 else:
                     # Use plain text if no HTML template
-                    msg.attach(MIMEText(message_body, 'plain'))
+                    alt_part.attach(MIMEText(message_body, 'plain'))
                 
                 # Send the email
                 server.send_message(msg)
@@ -249,6 +288,97 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
     
     return results
 
+# %% enviar emails en lotes
+def send_emails_in_batches(email_list, subject, message_body=None, template_path=None, placeholder_values=None, 
+                          sender_email=None, sender_password=None, smtp_server="smtp.isosdrive.com", smtp_port=587,
+                          batch_size=20, delay_between_batches=60, sent_emails_file=None):
+    """
+    Send emails to a list of recipients in batches to avoid spam detection.
+    
+    Parameters:
+    email_list (list): List of recipient email addresses
+    subject (str): Email subject
+    message_body (str, optional): Plain text email body content (used if template_path is None)
+    template_path (str, optional): Path to HTML template file
+    placeholder_values (dict, optional): Dictionary of values to replace placeholders in the template
+    sender_email (str): Sender's email address
+    sender_password (str): Sender's email password or app password
+    smtp_server (str, optional): SMTP server address
+    smtp_port (int, optional): SMTP server port
+    batch_size (int, optional): Number of emails to send in each batch
+    delay_between_batches (int, optional): Delay in seconds between batches
+    sent_emails_file (str, optional): Path to JSON file to track sent emails
+    
+    Returns:
+    dict: Results of the email sending operation
+    """
+    all_results = {
+        "success": [],
+        "failed": []
+    }
+    
+    # Load already sent emails if tracking file exists
+    sent_emails = set()
+    if sent_emails_file and os.path.exists(sent_emails_file):
+        try:
+            with open(sent_emails_file, 'r') as f:
+                sent_data = json.load(f)
+                sent_emails = set(sent_data.get('sent_emails', []))
+        except Exception as e:
+            print(f"Warning: Could not load sent emails tracking file: {e}")
+    
+    # Filter out already sent emails
+    email_list = [email for email in email_list if email not in sent_emails]
+    
+    # Process emails in batches
+    total_emails = len(email_list)
+    print(f"Preparing to send {total_emails} emails in batches of {batch_size}")
+    
+    for i in range(0, total_emails, batch_size):
+        batch = email_list[i:i+batch_size]
+        batch_num = (i // batch_size) + 1
+        total_batches = (total_emails + batch_size - 1) // batch_size
+        
+        print(f"\nSending batch {batch_num}/{total_batches} ({len(batch)} emails)...")
+        
+        # Send the current batch
+        batch_results = send_emails(
+            batch, 
+            subject, 
+            message_body, 
+            template_path, 
+            placeholder_values, 
+            sender_email, 
+            sender_password, 
+            smtp_server, 
+            smtp_port
+        )
+        
+        # Update overall results
+        all_results["success"].extend(batch_results["success"])
+        all_results["failed"].extend(batch_results["failed"])
+        
+        # Update sent emails tracking file
+        if sent_emails_file and batch_results["success"]:
+            sent_emails.update(batch_results["success"])
+            try:
+                with open(sent_emails_file, 'w') as f:
+                    json.dump({"sent_emails": list(sent_emails), "last_updated": datetime.now().isoformat()}, f, indent=2)
+                print(f"Updated sent emails tracking file with {len(batch_results['success'])} new emails")
+            except Exception as e:
+                print(f"Warning: Could not update sent emails tracking file: {e}")
+        
+        # Wait between batches if not the last batch
+        if i + batch_size < total_emails:
+            print(f"Waiting {delay_between_batches} seconds before sending next batch...")
+            time.sleep(delay_between_batches)
+    
+    print(f"\nEmail sending completed:")
+    print(f"Successfully sent: {len(all_results['success'])}")
+    print(f"Failed: {len(all_results['failed'])}")
+    
+    return all_results
+
 # %% ejecutar proceso principal
 def main():
     # Set up command line arguments
@@ -261,21 +391,31 @@ def main():
     parser.add_argument('--template', help='Path to HTML template file for email content')
     parser.add_argument('--sender', help='Sender email address (required when sending emails)')
     parser.add_argument('--password', help='Sender email password (required when sending emails)')
-    parser.add_argument('--smtp', default='smtp.gmail.com', help='SMTP server address')
+    parser.add_argument('--smtp', default='smtp.isosdrive.com', help='SMTP server address')
     parser.add_argument('--port', type=int, default=587, help='SMTP server port')
+    parser.add_argument('--batch-size', type=int, default=20, help='Number of emails to send in each batch')
+    parser.add_argument('--delay', type=int, default=60, help='Delay in seconds between batches')
+    parser.add_argument('--tracking-file', default='sent_emails.json', help='Path to JSON file to track sent emails')
     
     args = parser.parse_args()
     
+    # Create tracking file directory if it doesn't exist
+    tracking_file_dir = os.path.dirname(args.tracking_file)
+    if tracking_file_dir and not os.path.exists(tracking_file_dir):
+        os.makedirs(tracking_file_dir)
+    
     # Extract email addresses
-    emails = read_emails_from_excel(args.file_path, args.sheet)
+    emails, _ = read_emails_from_excel(args.file_path, args.sheet, args.tracking_file)
     
     # Print the extracted email addresses
     if emails:
-        print(f"Found {len(emails)} email addresses:")
-        for email in emails:
+        print(f"Found {len(emails)} email addresses to send:")
+        for email in emails[:5]:  # Show only first 5 for brevity
             print(email)
+        if len(emails) > 5:
+            print(f"... and {len(emails) - 5} more")
     else:
-        print("No email addresses found or the 'E-mail' column doesn't exist.")
+        print("No email addresses found, or all emails have already been sent.")
         return
     
     # Send emails if requested
@@ -284,7 +424,7 @@ def main():
             print("Error: Sender email and password are required to send emails.")
             return
         
-        print(f"\nSending emails to {len(emails)} recipients...")
+        print(f"\nPreparing to send emails to {len(emails)} recipients...")
         
         # Determine if we're using a template or plain text
         if args.template:
@@ -294,12 +434,12 @@ def main():
                 
             # Example placeholder values - you can customize this
             placeholder_values = {
-                "current_date": pd.Timestamp.now().strftime("%Y-%m-%d"),
+                "current_date": datetime.now().strftime("%Y-%m-%d"),
                 "sender_name": args.sender.split('@')[0] if '@' in args.sender else args.sender,
                 # Add more placeholder values as needed
             }
             
-            results = send_emails(
+            results = send_emails_in_batches(
                 emails, 
                 args.subject, 
                 template_path=args.template,
@@ -307,23 +447,36 @@ def main():
                 sender_email=args.sender, 
                 sender_password=args.password,
                 smtp_server=args.smtp,
-                smtp_port=args.port
+                smtp_port=args.port,
+                batch_size=args.batch_size,
+                delay_between_batches=args.delay,
+                sent_emails_file=args.tracking_file
             )
         else:
             # Use plain text body
-            results = send_emails(
+            results = send_emails_in_batches(
                 emails, 
                 args.subject, 
                 args.body, 
                 sender_email=args.sender, 
                 sender_password=args.password,
                 smtp_server=args.smtp,
-                smtp_port=args.port
+                smtp_port=args.port,
+                batch_size=args.batch_size,
+                delay_between_batches=args.delay,
+                sent_emails_file=args.tracking_file
             )
         
-        print(f"\nEmail sending results:")
+        print(f"\nEmail sending summary:")
         print(f"Successfully sent: {len(results['success'])}")
         print(f"Failed: {len(results['failed'])}")
+        
+        if results['failed']:
+            print("\nFailed emails:")
+            for failed in results['failed'][:5]:  # Show only first 5 failures for brevity
+                print(f"  {failed['email']}: {failed['error']}")
+            if len(results['failed']) > 5:
+                print(f"  ... and {len(results['failed']) - 5} more")
 
 if __name__ == "__main__":
     main()
