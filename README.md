@@ -50,6 +50,8 @@ python script.py your_excel_file.xlsx --send --template email_template.html --su
 | `--batch-size` | Number of emails to send in each batch | 20 |
 | `--delay` | Delay in seconds between batches | 60 |
 | `--tracking-file` | Path to JSON file to track sent emails | sent_emails.json |
+| `--stop` | Stop the service once reaching a specific number of sent emails |
+
 
 ### Excel File Format
 

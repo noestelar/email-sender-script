@@ -195,7 +195,7 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
             server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
             server.starttls(context=context)
         
-        server.set_debuglevel(1)  # Show all communication with the server
+        # server.set_debuglevel(1)  # Show all communication with the server
         
         # Try login with full email address
         server.login(sender_email, sender_password)
@@ -308,7 +308,7 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
 # %% enviar emails en lotes
 def send_emails_in_batches(email_list, subject, message_body=None, template_path=None, placeholder_values=None, 
                           sender_email=None, sender_password=None, smtp_server="smtpout.secureserver.net", smtp_port=465,
-                          batch_size=20, delay_between_batches=60, sent_emails_file=None):
+                          batch_size=20, delay_between_batches=60, sent_emails_file=None, max_emails=None):
     """
     Send emails to a list of recipients in batches to avoid spam detection.
     
@@ -325,6 +325,7 @@ def send_emails_in_batches(email_list, subject, message_body=None, template_path
     batch_size (int, optional): Number of emails to send in each batch
     delay_between_batches (int, optional): Delay in seconds between batches
     sent_emails_file (str, optional): Path to JSON file to track sent emails
+    max_emails (int, optional): Maximum number of emails to send before stopping
     
     Returns:
     dict: Results of the email sending operation
@@ -346,6 +347,12 @@ def send_emails_in_batches(email_list, subject, message_body=None, template_path
     
     # Filter out already sent emails
     email_list = [email for email in email_list if email not in sent_emails]
+    
+    # Apply max_emails limit if specified
+    if max_emails is not None and max_emails > 0:
+        if len(email_list) > max_emails:
+            print(f"Limiting to {max_emails} emails as specified by max_emails parameter")
+            email_list = email_list[:max_emails]
     
     # Process emails in batches
     total_emails = len(email_list)
@@ -413,6 +420,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=20, help='Number of emails to send in each batch')
     parser.add_argument('--delay', type=int, default=60, help='Delay in seconds between batches')
     parser.add_argument('--tracking-file', default='sent_emails.json', help='Path to JSON file to track sent emails')
+    parser.add_argument('--stop', type=int, help='Maximum number of emails to send before stopping')
     
     args = parser.parse_args()
     
@@ -472,6 +480,8 @@ def main():
             return
         
         print(f"\nPreparing to send emails to {len(emails)} recipients...")
+        if args.max_emails:
+            print(f"Will stop after sending {args.max_emails} emails as specified")
         
         # Determine if we're using a template or plain text
         if args.template:
@@ -497,7 +507,8 @@ def main():
                 smtp_port=args.port,
                 batch_size=args.batch_size,
                 delay_between_batches=args.delay,
-                sent_emails_file=args.tracking_file
+                sent_emails_file=args.tracking_file,
+                max_emails=args.max_emails
             )
         else:
             # Use plain text body
@@ -511,7 +522,8 @@ def main():
                 smtp_port=args.port,
                 batch_size=args.batch_size,
                 delay_between_batches=args.delay,
-                sent_emails_file=args.tracking_file
+                sent_emails_file=args.tracking_file,
+                max_emails=args.max_emails
             )
         
         print(f"\nEmail sending summary:")
