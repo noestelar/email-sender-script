@@ -420,7 +420,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=20, help='Number of emails to send in each batch')
     parser.add_argument('--delay', type=int, default=60, help='Delay in seconds between batches')
     parser.add_argument('--tracking-file', default='sent_emails.json', help='Path to JSON file to track sent emails')
-    parser.add_argument('--stop', type=int, help='Maximum number of emails to send before stopping')
+    parser.add_argument('--max-emails', type=int, help='Maximum number of emails to send before stopping')
     
     args = parser.parse_args()
     
