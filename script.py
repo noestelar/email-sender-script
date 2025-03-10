@@ -192,10 +192,11 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
             server = smtplib.SMTP(smtp_server, smtp_port)
             server.starttls()
         
-        if use_direct_ip:
-            server.connect(direct_ip, smtp_port)
-        else:
-            server.connect(smtp_server, smtp_port)
+        # Add timeout to prevent hanging connections
+        server.timeout = 30
+        
+        # Add debugging to see SMTP communication
+        server.set_debuglevel(1)
         
         server.login(sender_email, sender_password)
         
@@ -298,6 +299,9 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
         
     except Exception as e:
         print(f"Error setting up email server: {e}")
+        # Add more detailed error information
+        import traceback
+        traceback.print_exc()
     
     return results
 
@@ -430,6 +434,36 @@ def main():
     else:
         print("No email addresses found, or all emails have already been sent.")
         return
+    
+    # Add SMTP server validation
+    if args.send:
+        print(f"Will attempt to connect to SMTP server: {args.smtp} on port {args.port}")
+        try:
+            # Test SMTP connection before sending emails
+            if args.port == 465:
+                test_server = smtplib.SMTP_SSL(args.smtp, args.port, timeout=10)
+            else:
+                test_server = smtplib.SMTP(args.smtp, args.port, timeout=10)
+                test_server.starttls()
+            
+            test_server.ehlo()
+            print("SMTP server connection test successful")
+            
+            if args.sender and args.password:
+                test_server.login(args.sender, args.password)
+                print("SMTP authentication test successful")
+            
+            test_server.quit()
+        except Exception as e:
+            print(f"SMTP server connection test failed: {e}")
+            print("You may need to:")
+            print("1. Check your SMTP server settings")
+            print("2. Verify your username and password")
+            print("3. Check if your email provider allows SMTP access")
+            print("4. Check if you need to enable 'less secure apps' or generate an app password")
+            import traceback
+            traceback.print_exc()
+            return
     
     # Send emails if requested
     if args.send:
