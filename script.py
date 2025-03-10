@@ -11,6 +11,7 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
+import ssl
 
 # %% leer columnas de excel
 def read_excel_column(file_path, column_name=None, column_index=None, sheet_name=0):
@@ -157,7 +158,7 @@ def read_html_template(template_path, placeholder_values=None):
 
 # %% enviar emails
 def send_emails(email_list, subject, message_body=None, template_path=None, placeholder_values=None, 
-                sender_email=None, sender_password=None, smtp_server="smtpout.secureserver.net", smtp_port=465,
+                sender_email=None, sender_password=None, smtp_server="mail.isosdrive.com", smtp_port=465,
                 use_ssl=True, use_direct_ip=False, direct_ip=None):
     """
     Send emails to a list of recipients using either plain text or an HTML template.
@@ -186,18 +187,17 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
     
     try:
         # Set up the SMTP server with SSL
+        context = ssl.create_default_context()
+        
         if use_ssl:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=context, timeout=30)
         else:
-            server = smtplib.SMTP(smtp_server, smtp_port)
-            server.starttls()
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+            server.starttls(context=context)
         
-        # Add timeout to prevent hanging connections
-        server.timeout = 30
+        server.set_debuglevel(1)  # Show all communication with the server
         
-        # Add debugging to see SMTP communication
-        server.set_debuglevel(1)
-        
+        # Try login with full email address
         server.login(sender_email, sender_password)
         
         # Determine if we're using HTML template or plain text
