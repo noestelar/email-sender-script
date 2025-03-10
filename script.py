@@ -157,7 +157,8 @@ def read_html_template(template_path, placeholder_values=None):
 
 # %% enviar emails
 def send_emails(email_list, subject, message_body=None, template_path=None, placeholder_values=None, 
-                sender_email=None, sender_password=None, smtp_server="smtp.isosdrive.com", smtp_port=587):
+                sender_email=None, sender_password=None, smtp_server="smtpout.secureserver.net", smtp_port=465,
+                use_ssl=True, use_direct_ip=False, direct_ip=None):
     """
     Send emails to a list of recipients using either plain text or an HTML template.
     
@@ -171,6 +172,9 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
     sender_password (str): Sender's email password or app password
     smtp_server (str, optional): SMTP server address
     smtp_port (int, optional): SMTP server port
+    use_ssl (bool, optional): Whether to use SSL/TLS connection (True) or STARTTLS (False)
+    use_direct_ip (bool, optional): Whether to use a direct IP address instead of hostname
+    direct_ip (str, optional): Direct IP address of the mail server if use_direct_ip is True
     
     Returns:
     dict: Results of the email sending operation
@@ -182,8 +186,17 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
     
     try:
         # Set up the SMTP server with SSL
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
+        if use_ssl:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+        
+        if use_direct_ip:
+            server.connect(direct_ip, smtp_port)
+        else:
+            server.connect(smtp_server, smtp_port)
+        
         server.login(sender_email, sender_password)
         
         # Determine if we're using HTML template or plain text
@@ -290,7 +303,7 @@ def send_emails(email_list, subject, message_body=None, template_path=None, plac
 
 # %% enviar emails en lotes
 def send_emails_in_batches(email_list, subject, message_body=None, template_path=None, placeholder_values=None, 
-                          sender_email=None, sender_password=None, smtp_server="smtp.isosdrive.com", smtp_port=587,
+                          sender_email=None, sender_password=None, smtp_server="smtpout.secureserver.net", smtp_port=465,
                           batch_size=20, delay_between_batches=60, sent_emails_file=None):
     """
     Send emails to a list of recipients in batches to avoid spam detection.
@@ -391,8 +404,8 @@ def main():
     parser.add_argument('--template', help='Path to HTML template file for email content')
     parser.add_argument('--sender', help='Sender email address (required when sending emails)')
     parser.add_argument('--password', help='Sender email password (required when sending emails)')
-    parser.add_argument('--smtp', default='smtp.isosdrive.com', help='SMTP server address')
-    parser.add_argument('--port', type=int, default=587, help='SMTP server port')
+    parser.add_argument('--smtp', default='smtpout.secureserver.net', help='SMTP server address')
+    parser.add_argument('--port', type=int, default=465, help='SMTP server port')
     parser.add_argument('--batch-size', type=int, default=20, help='Number of emails to send in each batch')
     parser.add_argument('--delay', type=int, default=60, help='Delay in seconds between batches')
     parser.add_argument('--tracking-file', default='sent_emails.json', help='Path to JSON file to track sent emails')
